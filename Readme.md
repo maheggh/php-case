@@ -9,7 +9,8 @@ This script allows you to create a lead in pipedrive by entering org, personal d
 * API key for pipedrive
 
 ## How to install
-
+* Install php https://www.php.net/manual/en/install.php
+* Install composer https://getcomposer.org/download/
 * Clone the repository
   "git **clone** https://github.com/maheggh/php-case.git" or extract the zip file and
   cd php-case
