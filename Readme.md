@@ -21,5 +21,5 @@ This script allows you to create a lead in pipedrive by entering org, personal d
 
 * Open test/test_data.json and enter your test data
 * run the script by "cd src" and run "php pipedrive_lead_integration.php"
-* If the org or person is already registered you will get a prompt (org/person already exists, do you want to continue? (y/n)
+* If the org or person is already registered you will get a warning (org/person already exists, do you want to continue? (y/n)
 * If you want to see the lead you have just created you can cd test and run "php fetch_lead.php"
