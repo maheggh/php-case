@@ -1,0 +1,9 @@
+package-lock.json
+package.json
+Thumbs.db
+composer.json
+composer.lock
+node_modules
+/vendor/
+/composer.lock
+.DS_Store
