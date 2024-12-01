@@ -15,7 +15,7 @@ function makeLead($leadData)
         // API credentials
         $pipedriveCompanyDomain = 'nettbureauasdevelopmentteam';
         $pipedriveApiUrl = "https://{$pipedriveCompanyDomain}.pipedrive.com/api/v1";
-        $apiToken = 'insert API here';
+        $apiToken = 'enter_api_token_here';
 
         // Custom field IDs for leads and persons
         $customFieldIds = [
@@ -46,23 +46,29 @@ function makeLead($leadData)
                 'Kraftforvaltning'              => 42,
                 'Annen avtale/vet ikke'         => 43,
             ],
+            'contact_type' => [
+                'Privat'     => 30,
+                'Borettslag' => 31,
+                'Bedrift'    => 32,
+            ],
         ];
 
         // Check if organization already exists
         $organizationSearch = pipedriveAPICall(
-            "{$pipedriveApiUrl}/organizations/search",
+            "{$pipedriveApiUrl}/organizations/find",
             $apiToken,
-            ['term' => $leadData['organization_name'], 'fields' => 'name'],
+            ['term' => $leadData['organization_name'], 'exact_match' => true],
             'GET'
         );
 
-        if (!empty($organizationSearch['data']['items'])) {
-            $organizationId = $organizationSearch['data']['items'][0]['item']['id'];
+        if (!empty($organizationSearch['data'])) {
+            $organizationId = $organizationSearch['data'][0]['id'];
             $logger->info('Organization found', ['id' => $organizationId]);
+            echo "Warning: Organization '{$leadData['organization_name']}' already exists with ID: {$organizationId}.\n";
         } else {
             // Create new organization
             $organizationData = [
-                'name' => $leadData['organization_name'] ?? 'Default Organization',
+                'name' => $leadData['organization_name'],
             ];
 
             $logger->info('Creating organization', ['data' => $organizationData]);
@@ -77,18 +83,48 @@ function makeLead($leadData)
             $logger->info('Organization created', ['id' => $organizationId]);
         }
 
-        // Check if person already exists
+        // Check if person already exists using `/persons/search`
         $personSearch = pipedriveAPICall(
             "{$pipedriveApiUrl}/persons/search",
             $apiToken,
-            ['term' => $leadData['email'], 'fields' => 'email'],
+            ['term' => $leadData['email'], 'fields' => 'email', 'exact_match' => true],
             'GET'
         );
 
+        $personId = null;
         if (!empty($personSearch['data']['items'])) {
-            $personId = $personSearch['data']['items'][0]['item']['id'];
-            $logger->info('Person found', ['id' => $personId]);
-        } else {
+            foreach ($personSearch['data']['items'] as $item) {
+                $personIdCandidate = $item['item']['id'];
+                // Fetch full person details
+                $personDetailsResponse = pipedriveAPICall(
+                    "{$pipedriveApiUrl}/persons/{$personIdCandidate}",
+                    $apiToken,
+                    null,
+                    'GET'
+                );
+
+                if ($personDetailsResponse['success']) {
+                    $personDetails = $personDetailsResponse['data'];
+                    $emails = array_column($personDetails['email'], 'value');
+                    $phones = array_column($personDetails['phone'], 'value');
+
+                    $emailMatch = in_array($leadData['email'], $emails, true);
+                    $phoneMatch = in_array($leadData['phone'], $phones, true);
+
+                    if ($emailMatch || $phoneMatch) {
+                        $personId = $personIdCandidate;
+                        $logger->info('Person found', ['id' => $personId]);
+                        echo "Warning: Person '{$leadData['name']}' already exists with ID: {$personId}.\n";
+                        if (!promptToContinue()) {
+                            return 'Operation aborted by the user.';
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$personId) {
             // Create new person
             $personData = [
                 'name'       => $leadData['name'],
@@ -112,67 +148,74 @@ function makeLead($leadData)
 
         // Check if lead already exists
         $leadSearch = pipedriveAPICall(
-            "{$pipedriveApiUrl}/leads/search",
+            "{$pipedriveApiUrl}/leads",
             $apiToken,
-            ['term' => $leadData['name'], 'fields' => 'title'],
+            null,
             'GET'
         );
 
-        if (!empty($leadSearch['data']['items'])) {
-            $logger->info('Lead already exists, skipping creation.');
-            return 'Lead already exists, skipping creation.';
+        $leadExists = false;
+        if (!empty($leadSearch['data'])) {
+            foreach ($leadSearch['data'] as $lead) {
+                if (
+                    $lead['title'] === 'New lead from integration' &&
+                    (int)$lead['person_id'] === (int)$personId &&
+                    (int)$lead['organization_id'] === (int)$organizationId
+                ) {
+                    $leadExists = true;
+                    $logger->info('Duplicate lead found', ['id' => $lead['id']]);
+                    echo "Warning: Lead for person ID '{$personId}' already exists with ID: {$lead['id']}.\n";
+                    if (!promptToContinue()) {
+                        return 'Operation aborted by the user.';
+                    }
+                    break;
+                }
+            }
         }
 
-        // Create new lead
-        $newLeadData = [
-            'title'           => 'New lead from integration',
-            'person_id'       => $personId,
-            'organization_id' => $organizationId,
-            $customFieldIds['lead']['housing_type']  => $customFieldOptions['housing_type'][$leadData['housing_type']] ?? null,
-            $customFieldIds['lead']['property_size'] => (int) $leadData['property_size'],
-            $customFieldIds['lead']['deal_type']     => $customFieldOptions['deal_type'][$leadData['deal_type']] ?? null,
-        ];
+        if (!$leadExists) {
+            // Create new lead
+            $newLeadData = [
+                'title'           => 'New lead from integration',
+                'person_id'       => $personId,
+                'organization_id' => $organizationId,
+                $customFieldIds['lead']['housing_type']  => $customFieldOptions['housing_type'][$leadData['housing_type']] ?? null,
+                $customFieldIds['lead']['property_size'] => (int)$leadData['property_size'],
+                $customFieldIds['lead']['deal_type']     => $customFieldOptions['deal_type'][$leadData['deal_type']] ?? null,
+            ];
 
-        $logger->info('Creating lead', ['data' => $newLeadData]);
-        $leadResponse = pipedriveAPICall("{$pipedriveApiUrl}/leads", $apiToken, $newLeadData);
+            $logger->info('Creating lead', ['data' => $newLeadData]);
+            $leadResponse = pipedriveAPICall("{$pipedriveApiUrl}/leads", $apiToken, $newLeadData);
 
-        if (!$leadResponse['success']) {
-            $logger->error('Failed to create lead', ['error' => $leadResponse['error']]);
-            throw new Exception('Failed to create lead: ' . $leadResponse['error']);
+            if (!$leadResponse['success']) {
+                $logger->error('Failed to create lead', ['error' => $leadResponse['error']]);
+                throw new Exception('Failed to create lead: ' . $leadResponse['error']);
+            }
+
+            $leadId = $leadResponse['data']['id'];
+            $logger->info('Lead created', ['id' => $leadId]);
+
+            return 'Lead created with ID: ' . $leadId;
+        } else {
+            return 'Lead already exists, skipped creation.';
         }
-
-        $leadId = $leadResponse['data']['id'];
-        $logger->info('Lead created', ['id' => $leadId]);
-
-        return 'Lead created with ID: ' . $leadId;
     } catch (Exception $e) {
-        $logger->error('An error occurred', ['exception' => $e]);
-        throw $e;
+        $logger->error('An error occurred', ['exception' => $e->getMessage()]);
+        echo 'Error: ' . $e->getMessage() . PHP_EOL;
     }
 }
 
-function deleteLead($leadId)
-{
-    global $pipedriveApiUrl, $apiToken, $logger;
-
-    $logger->info('Deleting lead', ['id' => $leadId]);
-    $deleteResponse = pipedriveAPICall("{$pipedriveApiUrl}/leads/{$leadId}", $apiToken, null, 'DELETE');
-
-    if ($deleteResponse['success']) {
-        $logger->info('Lead deleted successfully', ['id' => $leadId]);
-    } else {
-        $logger->error('Failed to delete lead', ['error' => $deleteResponse['error']]);
-    }
-}
-
-
-
-function pipedriveAPICall($url, $token, $data = null, $method = 'POST')
+function pipedriveAPICall($url, $token, $params = null, $method = 'POST')
 {
     $curl = curl_init();
 
+    $query = '?api_token=' . $token;
+    if ($params && $method === 'GET') {
+        $query .= '&' . http_build_query($params);
+    }
+
     $options = [
-        CURLOPT_URL            => $url . '?api_token=' . $token,
+        CURLOPT_URL            => $url . $query,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST  => $method,
         CURLOPT_HTTPHEADER     => [
@@ -180,8 +223,8 @@ function pipedriveAPICall($url, $token, $data = null, $method = 'POST')
         ],
     ];
 
-    if ($data && $method !== 'GET') {
-        $options[CURLOPT_POSTFIELDS] = json_encode($data);
+    if ($params && $method !== 'GET') {
+        $options[CURLOPT_POSTFIELDS] = json_encode($params);
     }
 
     curl_setopt_array($curl, $options);
@@ -195,6 +238,15 @@ function pipedriveAPICall($url, $token, $data = null, $method = 'POST')
     }
 
     return json_decode($response, true);
+}
+
+function promptToContinue()
+{
+    echo "Do you want to continue? (y/n): ";
+    $handle = fopen("php://stdin", "r");
+    $line = trim(fgets($handle));
+    fclose($handle);
+    return strtolower($line) === 'y';
 }
 
 // Load test data from JSON file
