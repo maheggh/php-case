@@ -21,7 +21,7 @@ function makeLead($leadData)
         $pipedriveCompanyDomain = 'nettbureauasdevelopmentteam';
         $pipedriveApiUrl = "https://{$pipedriveCompanyDomain}.pipedrive.com/api/v1";
         // Enter your valid API token here
-        $apiToken = 'be0448adcde91187ed034cefa4e6dfc6aef314aa';
+        $apiToken = 'Enter_your_token_here';
 
         /**
          * Custom field IDs for leads and persons.
